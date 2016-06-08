@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+
+set -o nounset
+set -o errexit
+
+
+echo "Building from http://github.com/raspberrypi/linux ..."
+
+# Process script arguments
+GIT_BRANCH=$(wget https://api.github.com/repos/raspberrypi/linux -qq -O - | sed -n "s/.*\"default_branch\": \"\([^\"]\+\)\".*/\1/p")
+KERNEL_VER_EXPECTED=""
+MAKE_TARGETS=""
+while [[ $# > 1 ]]; do
+	KEY="$1"
+	case ${KEY} in
+		-b|--branch)
+			GIT_BRANCH=${2:-${GIT_BRANCH}}
+			shift
+			;;
+		-v|--version)
+			KERNEL_VER_EXPECTED=$2
+			shift
+			;;
+		*)
+			break
+			;;
+	esac
+	shift
+done
+MAKE_TARGETS=${@:-}
+
+# Find branch's current version
+KERNEL_MAKE=$(wget https://raw.githubusercontent.com/raspberrypi/linux/${GIT_BRANCH}/Makefile -qq -O -)
+KERNEL_MAKE_VERSION=$(echo "${KERNEL_MAKE}" | sed -n "s/\s*VERSION\s*=\s*\([0-9]\+\)\s*/\1/p")
+KERNEL_MAKE_PATCHLEVEL=$(echo "${KERNEL_MAKE}" | sed -n "s/\s*PATCHLEVEL\s*=\s*\([0-9]\+\)\s*/\1/p")
+KERNEL_MAKE_SUBLEVEL=$(echo "${KERNEL_MAKE}" | sed -n "s/\s*SUBLEVEL\s*=\s*\([0-9]\+\)\s*/\1/p")
+KERNEL_VER="${KERNEL_MAKE_VERSION}.${KERNEL_MAKE_PATCHLEVEL}.${KERNEL_MAKE_SUBLEVEL}"
+echo "   Branch ${GIT_BRANCH} version:"
+echo "      ${KERNEL_VER}"
+if [[ -n "${KERNEL_VER_EXPECTED}" && "${KERNEL_VER}" != "${KERNEL_VER_EXPECTED}" ]]; then
+	echo "      Did not find expected version: ${KERNEL_VER_EXPECTED}"
+	echo ""
+	exit 1
+fi
+KERNEL_DIR="/usr/src/linux-${KERNEL_VER}"
+
+# Check previous build
+if [ -e "${KERNEL_DIR}/arch/arm/boot/zImage" ]; then
+	echo "   ${KERNEL_VER} already built:"
+	echo "      ${KERNEL_DIR}"
+	echo ""
+	exit 0
+fi
+
+# Clone from git
+if [ -e "${KERNEL_DIR}" ]; then
+	echo "   Deleting ${KERNEL_DIR}/ ..."
+	sudo rm -rf "${KERNEL_DIR}" > /dev/null
+fi
+echo "   Cloning from git (very large) ..."
+sudo git clone --quiet --depth 1 git://github.com/raspberrypi/linux.git --branch "${GIT_BRANCH}" "${KERNEL_DIR}" > /dev/null
+if [ ! -e "${KERNEL_DIR}/Makefile" ]; then
+	echo "      Git clone failed"
+	echo ""
+	exit 1
+fi
+cd "${KERNEL_DIR}"
+	
+# Prep work (depending on RPi 1 vs 2/3)
+echo "   Running make mrproper/defconfig/kernelrelease (prep) ..."
+sudo make mrproper > /dev/null
+RPI_REV=$((0x`grep Revision /proc/cpuinfo | sed -n "s/.*: \([a-f0-9]\+\)$/\1/p"`))
+if [[ "${RPI_REV}" -ge "2" && "${RPI_REV}" -le "15" ]]; then
+	KERNEL="kernel"
+	sudo make bcmrpi_defconfig > /dev/null
+else
+	KERNEL="kernel7"
+	sudo make bcm2709_defconfig > /dev/null
+fi
+sudo make kernelrelease > /dev/null
+KERNEL_VER=$(make -s kernelrelease)
+echo "      Kernel release version: ${KERNEL_VER}"
+
+# Build based on $MAKE_TARGETS
+MAKE_TARGETS=${MAKE_TARGETS:-zImage modules dtbs}
+echo "   Running make ${MAKE_TARGETS// //} (build) ..."
+sudo make -j$(nproc) ${MAKE_TARGETS} > /dev/null
+if [[ "${MAKE_TARGETS}" == *"zImage"* && ! -e "arch/arm/boot/zImage" ]]; then
+	echo "      Build failed"
+	echo ""
+	exit 1
+fi
+if [[ "${MAKE_TARGETS}" == *"modules"* && ! -e "net/wireless/cfg80211.ko" ]]; then
+	echo "      Build failed"
+	echo ""
+	exit 1
+fi
+
+# Install what was built
+if [ "${MAKE_TARGETS}" == *"zImage"* ]; then
+	echo "   Installing kernel ..."
+	sudo cp arch/arm/boot/dts/*.dtb /boot/
+	sudo cp arch/arm/boot/dts/overlays/*.dtb* /boot/overlays/
+	sudo cp arch/arm/boot/dts/overlays/README /boot/overlays/
+	sudo scripts/mkknlimg arch/arm/boot/zImage /boot/${KERNEL}.img > /dev/null
+	echo "      A reboot is required to use the new kernel"
+fi
+if [ "${MAKE_TARGETS}" == *"modules"* ]; then
+	echo "   Installing modules ..."
+	sudo make modules_install > /dev/null
+fi
+
+echo ""
