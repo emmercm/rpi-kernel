@@ -97,7 +97,7 @@ if [[ "${MAKE_TARGETS}" == *"modules"* && ! -e "net/wireless/cfg80211.ko" ]]; th
 fi
 
 # Install what was built
-if [ "${MAKE_TARGETS}" == *"zImage"* ]; then
+if [[ "${MAKE_TARGETS}" == *"zImage"* ]]; then
 	echo "   Installing kernel ..."
 	sudo cp arch/arm/boot/dts/*.dtb /boot/
 	sudo cp arch/arm/boot/dts/overlays/*.dtb* /boot/overlays/
@@ -105,7 +105,7 @@ if [ "${MAKE_TARGETS}" == *"zImage"* ]; then
 	sudo scripts/mkknlimg arch/arm/boot/zImage /boot/${KERNEL}.img > /dev/null
 	echo "      A reboot is required to use the new kernel"
 fi
-if [ "${MAKE_TARGETS}" == *"modules"* ]; then
+if [[ "${MAKE_TARGETS}" == *"modules"* ]]; then
 	echo "   Installing modules ..."
 	sudo make modules_install > /dev/null
 fi
