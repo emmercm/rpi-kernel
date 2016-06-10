@@ -30,7 +30,11 @@ done
 MAKE_TARGETS=${@:-}
 
 # Find branch's current version
-KERNEL_MAKE=$(wget https://raw.githubusercontent.com/raspberrypi/linux/${GIT_BRANCH}/Makefile -qq -O -)
+KERNEL_MAKE=$(wget https://raw.githubusercontent.com/raspberrypi/linux/${GIT_BRANCH}/Makefile -qq -O - || true)
+if [ "${KERNEL_MAKE}" == "" ]; then
+	echo "   Unable to download ${GIT_BRANCH} makefile"
+	exit 1
+fi
 KERNEL_MAKE_VERSION=$(echo "${KERNEL_MAKE}" | sed -n "s/\s*VERSION\s*=\s*\([0-9]\+\)\s*/\1/p")
 KERNEL_MAKE_PATCHLEVEL=$(echo "${KERNEL_MAKE}" | sed -n "s/\s*PATCHLEVEL\s*=\s*\([0-9]\+\)\s*/\1/p")
 KERNEL_MAKE_SUBLEVEL=$(echo "${KERNEL_MAKE}" | sed -n "s/\s*SUBLEVEL\s*=\s*\([0-9]\+\)\s*/\1/p")
