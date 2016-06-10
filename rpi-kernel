@@ -69,13 +69,21 @@ cd "${KERNEL_DIR}"
 # Prep work (depending on RPi 1 vs 2/3)
 echo "   Running make mrproper/defconfig/kernelrelease (prep) ..."
 sudo make mrproper > /dev/null
-RPI_REV=$((0x`grep Revision /proc/cpuinfo | sed -n "s/.*: \([a-f0-9]\+\)$/\1/p"`))
-if [[ "${RPI_REV}" -ge "2" && "${RPI_REV}" -le "15" ]]; then
+CPU_HARDWARE=$(grep Hardware /proc/cpuinfo | awk '{print $3}')
+if [ "${CPU_HARDWARE}" == "BCM2708" ]; then
 	KERNEL="kernel"
 	sudo make bcmrpi_defconfig > /dev/null
-else
+elif [ "${CPU_HARDWARE}" == "BCM2709" ]; then
 	KERNEL="kernel7"
 	sudo make bcm2709_defconfig > /dev/null
+else
+	echo "      Hardware not explicitly supported, guessing defconfig ..."
+	KERNEL="kernel$(uname -r | sed -n "s/.*-v\([0-9]\+\).*/\1/p")"
+	sudo make $(echo "${CPU_HARDWARE}" | awk '{print tolower($0)}')_defconfig > /dev/null || (
+		echo "         Guessed wrong, attempting to use current kernel config ..."
+		zcat /proc/config.gz | sudo tee .config > /dev/null
+		sudo make oldconfig > /dev/null
+	)
 fi
 sudo make kernelrelease > /dev/null
 KERNEL_VER=$(make -s kernelrelease)

@@ -1,9 +1,9 @@
 # rpi-kernel
-A tool to build an official kernel on your Raspberry Pi.
+A tool to build the Raspberry Pi Foundation kernel on your Raspberry Pi.
 
 ## Dependencies
 ```
-$ apt-get install wget git make gcc bc screen ncurses-dev
+$ sudo apt-get install wget git make gcc bc
 ```
 
 ## Execution
@@ -17,7 +17,7 @@ $ ./rpi-kernel
 $ ./rpi-kernel [-b <branch>] [-v <expected_kernel_version>] [make targets]
 ```
 
-#### Examples:
+#### Advanced Examples:
 ```
 $ ./rpi-kernel -b rpi-4.2.y
 $ ./rpi-kernel -b rpi-4.3.y -v 4.3.3
