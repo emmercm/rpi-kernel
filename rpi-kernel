@@ -27,7 +27,7 @@ while [[ $# > 1 ]]; do
 	esac
 	shift
 done
-MAKE_TARGETS=${@:-}
+MAKE_TARGETS=${@:-zImage modules dtbs}
 
 # Find branch's current version
 KERNEL_MAKE=$(wget https://raw.githubusercontent.com/raspberrypi/linux/${GIT_BRANCH}/Makefile -qq -O - || true)
@@ -94,15 +94,13 @@ KERNEL_VER=$(make -s kernelrelease)
 echo "      Kernel release version: ${KERNEL_VER}"
 
 # Build based on $MAKE_TARGETS
-MAKE_TARGETS=${MAKE_TARGETS:-zImage modules dtbs}
 echo "   Running make ${MAKE_TARGETS// //} (build) ..."
 sudo make -j$(nproc) ${MAKE_TARGETS} > /dev/null
-if [[ "${MAKE_TARGETS}" == *"zImage"* && ! -e "arch/arm/boot/zImage" ]]; then
-	echo "      Build failed"
-	echo ""
-	exit 1
-fi
-if [[ "${MAKE_TARGETS}" == *"modules"* && ! -e "net/wireless/cfg80211.ko" ]]; then
+if [[
+( "${MAKE_TARGETS}" == *"zImage"* && ! -e "arch/arm/boot/zImage" ) || \
+( "${MAKE_TARGETS}" == *"modules"* && ! -e "net/wireless/cfg80211.ko" ) || \
+( "${MAKE_TARGETS}" == *"dtbs"* && "$(ls arch/arm/boot/dts/*.dtb 2> /dev/null)" == "" ) \
+]]; then
 	echo "      Build failed"
 	echo ""
 	exit 1
@@ -111,15 +109,19 @@ fi
 # Install what was built
 if [[ "${MAKE_TARGETS}" == *"zImage"* ]]; then
 	echo "   Installing kernel ..."
-	sudo cp arch/arm/boot/dts/*.dtb /boot/
-	sudo cp arch/arm/boot/dts/overlays/*.dtb* /boot/overlays/
-	sudo cp arch/arm/boot/dts/overlays/README /boot/overlays/
 	sudo scripts/mkknlimg arch/arm/boot/zImage /boot/${KERNEL}.img > /dev/null
 	echo "      A reboot is required to use the new kernel"
 fi
 if [[ "${MAKE_TARGETS}" == *"modules"* ]]; then
 	echo "   Installing modules ..."
 	sudo make modules_install > /dev/null
+fi
+if [[ "${MAKE_TARGETS}" == *"dtbs"* ]]; then
+	echo "   Installing device tree ..."
+	sudo cp arch/arm/boot/dts/*.dtb /boot/
+	sudo cp arch/arm/boot/dts/overlays/*.dtb* /boot/overlays/
+	sudo cp arch/arm/boot/dts/overlays/README /boot/overlays/
+	echo "      A reboot is required to use the new device tree"
 fi
 
 echo ""
