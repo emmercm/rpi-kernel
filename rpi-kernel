@@ -65,7 +65,7 @@ if [[ -e "${KERNEL_DIR}" ]]; then
 	echo "   Deleting ${KERNEL_DIR}/ ..."
 	sudo rm -rf "${KERNEL_DIR}" > /dev/null
 fi
-echo "   Cloning from git (very large) ..."
+echo "   Cloning from git (very large) to ${KERNEL_DIR} ..."
 sudo git clone --quiet --depth 1 git://github.com/raspberrypi/linux.git --branch "${GIT_BRANCH}" "${KERNEL_DIR}" > /dev/null
 if [[ ! -e "${KERNEL_DIR}/Makefile" ]]; then
 	echo "      Git clone failed"
