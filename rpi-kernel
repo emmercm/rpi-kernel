@@ -30,6 +30,10 @@ done
 MAKE_TARGETS=${@:-zImage modules dtbs}
 
 # Find branch's current version
+if [[ "${GIT_BRANCH}" == "" ]]; then
+	echo "   Unable to find git branch"
+	exit 1
+fi
 KERNEL_MAKE=$(wget https://raw.githubusercontent.com/raspberrypi/linux/${GIT_BRANCH}/Makefile -qq -O - || true)
 if [[ "${KERNEL_MAKE}" == "" ]]; then
 	echo "   Unable to download ${GIT_BRANCH} makefile"
