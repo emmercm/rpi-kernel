@@ -4,8 +4,10 @@ A tool to build the Raspberry Pi Foundation kernel on your Raspberry Pi.
 
 ## Dependencies
 
+Install `wget` plus the kernel [building dependencies](https://www.raspberrypi.org/documentation/linux/kernel/building.md):
+
 ```bash
-sudo apt-get install wget git make gcc bc
+sudo apt-get install wget git bc bison flex libssl-dev make
 ```
 
 ## Execution
@@ -25,7 +27,13 @@ sudo apt-get install wget git make gcc bc
 ### Advanced Examples
 
 ```bash
-./rpi-kernel -b rpi-4.2.y
-./rpi-kernel -b rpi-4.3.y -v 4.3.3
-./rpi-kernel -b rpi-4.4.y modules
+./rpi-kernel -b rpi-5.2.y
+```
+
+```bash
+./rpi-kernel -b rpi-5.3.y -v 5.3.18
+```
+
+```bash
+./rpi-kernel -b rpi-5.4.y modules
 ```
