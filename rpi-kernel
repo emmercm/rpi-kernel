@@ -113,7 +113,7 @@ fi
 # Install what was built
 if [[ "${MAKE_TARGETS}" == *"zImage"* ]]; then
 	echo "   Installing kernel ..."
-	sudo scripts/mkknlimg arch/arm/boot/zImage /boot/${KERNEL}.img > /dev/null
+	sudo cp arch/arm/boot/zImage /boot/$KERNEL.img > /dev/null
 	echo "      A reboot is required to use the new kernel"
 fi
 if [[ "${MAKE_TARGETS}" == *"modules"* ]]; then
