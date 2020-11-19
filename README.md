@@ -5,7 +5,7 @@ A tool to build the Raspberry Pi Foundation kernel on your Raspberry Pi.
 ## Dependencies
 
 ```bash
-sudo apt-get install wget git make gcc bc
+sudo apt-get install wget git make gcc bc flex
 ```
 
 ## Execution
