@@ -34,7 +34,7 @@ if [[ "${GIT_BRANCH}" == "" ]]; then
 	echo "   Unable to find git branch"
 	exit 1
 fi
-KERNEL_MAKE=$(wget https://raw.githubusercontent.com/raspberrypi/linux/${GIT_BRANCH}/Makefile -qq -O - || true)
+KERNEL_MAKE=$(wget "https://raw.githubusercontent.com/raspberrypi/linux/${GIT_BRANCH}/Makefile" -qq -O - || true)
 if [[ "${KERNEL_MAKE}" == "" ]]; then
 	echo "   Unable to download ${GIT_BRANCH} makefile"
 	exit 1
@@ -52,68 +52,74 @@ if [[ -n "${KERNEL_VER_EXPECTED}" && "${KERNEL_VER}" != "${KERNEL_VER_EXPECTED}"
 fi
 KERNEL_DIR="/usr/src/linux-${KERNEL_VER}"
 
-# Check previous build
-if [[ -e "${KERNEL_DIR}/arch/arm/boot/zImage" ]]; then
-	echo "   ${KERNEL_VER} already built:"
-	echo "      ${KERNEL_DIR}"
-	echo ""
-	exit 0
-fi
-
-# Clone from git
-if [[ -e "${KERNEL_DIR}" ]]; then
-	echo "   Deleting ${KERNEL_DIR}/ ..."
-	sudo rm -rf "${KERNEL_DIR}" > /dev/null
-fi
-echo "   Cloning from git (very large) to ${KERNEL_DIR} ..."
-sudo git clone --quiet --depth 1 git://github.com/raspberrypi/linux.git --branch "${GIT_BRANCH}" "${KERNEL_DIR}" > /dev/null
-if [[ ! -e "${KERNEL_DIR}/Makefile" ]]; then
-	echo "      Git clone failed"
-	echo ""
-	exit 1
-fi
-cd "${KERNEL_DIR}"
-	
-# Prep work (depending on RPi 1 vs 2/3)
-echo "   Running make mrproper/defconfig/kernelrelease (prep) ..."
-sudo make mrproper > /dev/null
+# Set KERNEL variable
 CPU_HARDWARE=$(grep Hardware /proc/cpuinfo | awk '{print $3}')
 if [[ "${CPU_HARDWARE}" == "BCM2708" || "${CPU_HARDWARE}" == "BCM2835" ]]; then
 	KERNEL="kernel"
-	sudo make bcmrpi_defconfig > /dev/null
 elif [[ "${CPU_HARDWARE}" == "BCM2709" || "${CPU_HARDWARE}" == "BCM2836" || "${CPU_HARDWARE}" == "BCM2837" ]]; then
 	KERNEL="kernel7"
-	sudo make bcm2709_defconfig > /dev/null
 else
-	echo "      Hardware not explicitly supported, guessing defconfig ..."
-	KERNEL="kernel$(uname -r | sed -n "s/.*-v\([0-9]\+\).*/\1/p")"
-	sudo make $(echo "${CPU_HARDWARE}" | awk '{print tolower($0)}')_defconfig > /dev/null || (
-		echo "         Guessed wrong, attempting to use current kernel config ..."
-		zcat /proc/config.gz | sudo tee .config > /dev/null
-		sudo make oldconfig > /dev/null
-	)
+	KERNEL="kernel$(uname -r | sed -n "s/.*-v\([a-zA-Z0-9]\+\).*/\1/p")"
 fi
-sudo make kernelrelease > /dev/null
-KERNEL_VER=$(make -s kernelrelease)
-echo "      Kernel release version: ${KERNEL_VER}"
 
-# Build based on $MAKE_TARGETS
-echo "   Running make ${MAKE_TARGETS// //} (build) ..."
-sudo make -j$(nproc) ${MAKE_TARGETS} > /dev/null
-if [[
-( "${MAKE_TARGETS}" == *"zImage"* && ! -e "arch/arm/boot/zImage" ) || \
-( "${MAKE_TARGETS}" == *"modules"* && ! -e "net/wireless/cfg80211.ko" ) || \
-( "${MAKE_TARGETS}" == *"dtbs"* && "$(ls arch/arm/boot/dts/*.dtb 2> /dev/null)" == "" ) \
-]]; then
-	echo "      Build failed"
-	echo ""
-	exit 1
+# Build if not already built
+if [[ ! -f "${KERNEL_DIR}/arch/arm/boot/zImage" ]]; then
+	# Clone from git
+	if [[ -d "${KERNEL_DIR}" ]]; then
+		echo "   Deleting ${KERNEL_DIR} ..."
+		sudo rm -rf "${KERNEL_DIR}" > /dev/null
+	fi
+	echo "   Cloning from git (very large) to ${KERNEL_DIR} ..."
+	sudo git clone --quiet --depth 1 git://github.com/raspberrypi/linux.git --branch "${GIT_BRANCH}" "${KERNEL_DIR}" > /dev/null
+	if [[ ! -f "${KERNEL_DIR}/Makefile" ]]; then
+		echo "      Git clone failed"
+		echo ""
+		exit 1
+	fi
+	cd "${KERNEL_DIR}"
+		
+	# Prep work
+	echo "   Running make mrproper/defconfig/kernelrelease (prep) ..."
+	sudo make mrproper > /dev/null
+	if [[ "${KERNEL}" == "kernel" ]]; then
+		sudo make bcmrpi_defconfig > /dev/null
+	elif [[ "${KERNEL}" == "kernel7" ]]; then
+		sudo make bcm2709_defconfig > /dev/null
+	else
+		echo "      Hardware not explicitly supported, guessing defconfig ..."
+		CPU_HARDWARE=$(grep Hardware /proc/cpuinfo | awk '{print $3}')
+		sudo make "$(echo "${CPU_HARDWARE}" | awk '{print tolower($0)}')_defconfig" > /dev/null || (
+			echo "         Guessed wrong, attempting to use current kernel config ..."
+			zcat /proc/config.gz | sudo tee .config > /dev/null
+			sudo make oldconfig > /dev/null
+		)
+	fi
+	sudo make kernelrelease > /dev/null
+	KERNEL_VER=$(make -s kernelrelease)
+	echo "      Kernel release version: ${KERNEL_VER}"
+
+	# Build based on $MAKE_TARGETS
+	echo "   Running make ${MAKE_TARGETS// //} (build) ..."
+	sudo make -j$(nproc) ${MAKE_TARGETS} > /dev/null
+	if [[
+	( "${MAKE_TARGETS}" == *"zImage"* && ! -f "arch/arm/boot/zImage" ) || \
+	( "${MAKE_TARGETS}" == *"modules"* && ! -f "net/wireless/cfg80211.ko" ) || \
+	( "${MAKE_TARGETS}" == *"dtbs"* && "$(ls arch/arm/boot/dts/*.dtb 2> /dev/null)" == "" ) \
+	]]; then
+		echo "      Build failed"
+		echo ""
+		exit 1
+	fi
+else
+	echo "   ${KERNEL_VER} already built:"
+	echo "      ${KERNEL_DIR}"
 fi
 
 # Install what was built
+cd "${KERNEL_DIR}"
 if [[ "${MAKE_TARGETS}" == *"zImage"* ]]; then
 	echo "   Installing kernel ..."
-	sudo cp arch/arm/boot/zImage /boot/$KERNEL.img > /dev/null
+	sudo cp arch/arm/boot/zImage "/boot/${KERNEL}.img" > /dev/null
 	echo "      A reboot is required to use the new kernel"
 fi
 if [[ "${MAKE_TARGETS}" == *"modules"* ]]; then
