@@ -1,20 +1,46 @@
 #!/usr/bin/env bash
-
-set -o nounset
-set -o errexit
-
+set -euo pipefail
+shopt -s extglob > /dev/null
 
 echo "Building from http://github.com/raspberrypi/linux ..."
 
-# Process script arguments
+# Determine if running within Raspbian
+IS_RASPBIAN=false
+if [[ -f /etc/os-release && "$(grep raspbian /etc/os-release)" != "" ]]; then
+	IS_RASPBIAN=true
+fi
+
+# CLI argument defaults
 GIT_BRANCH=$(wget https://api.github.com/repos/raspberrypi/linux -qq -O - | sed -n "s/.*\"default_branch\": \"\([^\"]\+\)\".*/\1/p")
 KERNEL_VER_EXPECTED=""
-MAKE_TARGETS=""
-while [[ $# > 1 ]]; do
+ARCH="$(uname -m | sed 's/v.\+//')"
+MAKE_TARGETS="zImage modules dtbs"
+KERNEL="kernel7l"
+# Find Raspberry Pi processor, determine kernel image
+#	https://www.raspberrypi.org/documentation/hardware/raspberrypi/revision-codes/README.md
+#	https://raspberrypi.stackexchange.com/q/100076
+RPI_PROCESSORS=('BCM2835' 'BCM2836' 'BCM2837' 'BCM2711')
+RPI_PROCESSOR=""
+if [[ -f /proc/cpuinfo ]]; then
+	# shellcheck disable=SC1102
+	RPI_PROCESSOR=${RPI_PROCESSORS[$((0x$((grep Revision /proc/cpuinfo || true) | awk '{print $3}')>>12&0xf))]}
+fi
+RPI_PROCESSOR=${RPI_PROCESSOR:-${RPI_PROCESSORS[0]}}
+
+# Read CLI arguments
+while [[ $# -gt 1 ]]; do
 	KEY="$1"
 	case ${KEY} in
+		-a|--arch)
+			ARCH=$2
+			shift
+			;;
 		-b|--branch)
 			GIT_BRANCH=${2:-${GIT_BRANCH}}
+			shift
+			;;
+		-p|--processor)
+			RPI_PROCESSOR="$(echo "$2" | awk '{print toupper($0)}')"
 			shift
 			;;
 		-v|--version)
@@ -27,7 +53,63 @@ while [[ $# > 1 ]]; do
 	esac
 	shift
 done
-MAKE_TARGETS=${@:-zImage modules dtbs}
+MAKE_TARGETS=${*:-${MAKE_TARGETS}}
+
+# Determine kernel and defconfig
+#   Raspberry Pi 1 Model A+ V1.1 (rev 0012): BCM2835
+#   Raspberry Pi 1 Model B  V1.0 (rev 0002): BCM2835
+#   Raspberry Pi 1 Model B+ V1.2 (rev 0010): BCM2835
+#   Raspberry Pi 2 Model B  V1.1 (rev a01041): BCM2836
+#   Raspberry Pi 3 Model B  V1.2 (rev a22082): BCM2837
+#   Raspberry Pi 3 Model B+ V1.3 (rev a020d3): BCM2837
+#   Raspberry Pi 4 Model B  V1.2 (rev b03112): BCM2711
+#   Rapsberry Pi Zero       V1.2 (rev 900092): BCM2835
+#   Raspberry Pi Zero       V1.3 (rev 900093): BCM2835
+#   Raspberry Pi Zero W     V1.1 (rev 9000c1): BCM2835
+KERNEL=kernel
+DEFCONFIG=bcmrpi
+if [[ "${ARCH}" == *64* ]]; then
+	KERNEL=kernel8
+	if [[ "${RPI_PROCESSOR}" == "BCM2837" ]]; then
+		# Raspberry Pi 3
+		DEFCONFIG=bcmrpi3
+	elif [[ "${RPI_PROCESSOR}" == "BCM2711" ]]; then
+		# Raspberry Pi 4
+		DEFCONFIG=bcm2711
+	fi
+elif [[ "${RPI_PROCESSOR}" == "BCM2835" ]]; then
+	# Rasbperry Pi 1
+	KERNEL=kernel
+	DEFCONFIG=bcmrpi
+elif [[ "${RPI_PROCESSOR}" == "BCM2836" || "${RPI_PROCESSOR}" == "BCM2837" ]]; then
+	# Raspberry Pi 2 & 3
+	KERNEL=kernel7
+	DEFCONFIG=bcm2709
+elif [[ "${RPI_PROCESSOR}" == "BCM2711" ]]; then
+	# Raspberry Pi 4
+	KERNEL=kernel7l
+	DEFCONFIG=bcm2711
+else
+	KERNEL="kernel$(uname -r | sed -n "s/.*-v\([a-zA-Z0-9]\+\).*/\1/p")"
+	DEFCONFIG="$(echo "${RPI_PROCESSOR}" | awk '{print tolower($0)}')"
+fi
+
+# Massage the correct kernel make target
+IMAGE=zImage
+if [[ "${ARCH}" == *64* ]]; then
+	IMAGE=Image
+fi
+MAKE_TARGETS=${MAKE_TARGETS/?(z)Image/${IMAGE}}
+
+# Determine cross-compile strings
+CROSS_COMPILE=""
+if [[ "${IS_RASPBIAN}" == false ]]; then
+	if [[ "${ARCH}" == *64* ]]; then
+		CROSS_COMPILE=aarch64-linux-gnu-
+	else
+		CROSS_COMPILE=arm-linux-gnueabihf-
+	fi
+fi
 
 # Find branch's current version
 if [[ "${GIT_BRANCH}" == "" ]]; then
@@ -52,18 +134,8 @@ if [[ -n "${KERNEL_VER_EXPECTED}" && "${KERNEL_VER}" != "${KERNEL_VER_EXPECTED}"
 fi
 KERNEL_DIR="/usr/src/linux-${KERNEL_VER}"
 
-# Set KERNEL variable
-CPU_HARDWARE=$(grep Hardware /proc/cpuinfo | awk '{print $3}')
-if [[ "${CPU_HARDWARE}" == "BCM2708" || "${CPU_HARDWARE}" == "BCM2835" ]]; then
-	KERNEL="kernel"
-elif [[ "${CPU_HARDWARE}" == "BCM2709" || "${CPU_HARDWARE}" == "BCM2836" || "${CPU_HARDWARE}" == "BCM2837" ]]; then
-	KERNEL="kernel7"
-else
-	KERNEL="kernel$(uname -r | sed -n "s/.*-v\([a-zA-Z0-9]\+\).*/\1/p")"
-fi
-
 # Build if not already built
-if [[ ! -f "${KERNEL_DIR}/arch/arm/boot/zImage" ]]; then
+if [[ ! -f "${KERNEL_DIR}/arch/${ARCH}/boot/${IMAGE}" ]]; then
 	# Clone from git
 	if [[ -d "${KERNEL_DIR}" ]]; then
 		echo "   Deleting ${KERNEL_DIR} ..."
@@ -81,30 +153,23 @@ if [[ ! -f "${KERNEL_DIR}/arch/arm/boot/zImage" ]]; then
 	# Prep work
 	echo "   Running make mrproper/defconfig/kernelrelease (prep) ..."
 	sudo make mrproper > /dev/null
-	if [[ "${KERNEL}" == "kernel" ]]; then
-		sudo make bcmrpi_defconfig > /dev/null
-	elif [[ "${KERNEL}" == "kernel7" ]]; then
-		sudo make bcm2709_defconfig > /dev/null
-	else
-		echo "      Hardware not explicitly supported, guessing defconfig ..."
-		CPU_HARDWARE=$(grep Hardware /proc/cpuinfo | awk '{print $3}')
-		sudo make "$(echo "${CPU_HARDWARE}" | awk '{print tolower($0)}')_defconfig" > /dev/null || (
-			echo "         Guessed wrong, attempting to use current kernel config ..."
-			zcat /proc/config.gz | sudo tee .config > /dev/null
-			sudo make oldconfig > /dev/null
-		)
-	fi
+	sudo make ${ARCH:+ARCH="${ARCH}"} ${CROSS_COMPILE:+CROSS_COMPILE="${CROSS_COMPILE}"} "${DEFCONFIG}_defconfig" > /dev/null || (
+		zcat /proc/config.gz | sudo tee .config > /dev/null
+		sudo make oldconfig > /dev/null
+	)
 	sudo make kernelrelease > /dev/null
-	KERNEL_VER=$(make -s kernelrelease)
+	KERNEL_VER=$(sudo make -s kernelrelease)
 	echo "      Kernel release version: ${KERNEL_VER}"
 
 	# Build based on $MAKE_TARGETS
 	echo "   Running make ${MAKE_TARGETS// //} (build) ..."
-	sudo make -j$(nproc) ${MAKE_TARGETS} > /dev/null
+	# shellcheck disable=SC2086
+	sudo make ${ARCH:+ARCH="${ARCH}"} ${CROSS_COMPILE:+CROSS_COMPILE="${CROSS_COMPILE}"} "-j$(nproc)" ${MAKE_TARGETS} > /dev/null
 	if [[
-	( "${MAKE_TARGETS}" == *"zImage"* && ! -f "arch/arm/boot/zImage" ) || \
+	( "${MAKE_TARGETS}" == *"${IMAGE}"* && ! -f "arch/${ARCH}/boot/${IMAGE}" ) || \
 	( "${MAKE_TARGETS}" == *"modules"* && ! -f "net/wireless/cfg80211.ko" ) || \
-	( "${MAKE_TARGETS}" == *"dtbs"* && "$(ls arch/arm/boot/dts/*.dtb 2> /dev/null)" == "" ) \
+	( "${ARCH}" != *64* && "${MAKE_TARGETS}" == *"dtbs"* && "$(ls "arch/${ARCH}/boot/dts/"*.dtb 2> /dev/null)" == "" ) || \
+	( "${ARCH}" == *64* && "${MAKE_TARGETS}" == *"dtbs"* && "$(ls "arch/${ARCH}/boot/dts/broadcom/"*.dtb 2> /dev/null)" == "" ) \
 	]]; then
 		echo "      Build failed"
 		echo ""
@@ -115,23 +180,29 @@ else
 	echo "      ${KERNEL_DIR}"
 fi
 
-# Install what was built
-cd "${KERNEL_DIR}"
-if [[ "${MAKE_TARGETS}" == *"zImage"* ]]; then
-	echo "   Installing kernel ..."
-	sudo cp arch/arm/boot/zImage "/boot/${KERNEL}.img" > /dev/null
-	echo "      A reboot is required to use the new kernel"
-fi
-if [[ "${MAKE_TARGETS}" == *"modules"* ]]; then
-	echo "   Installing modules ..."
-	sudo make modules_install > /dev/null
-fi
-if [[ "${MAKE_TARGETS}" == *"dtbs"* ]]; then
-	echo "   Installing device tree ..."
-	sudo cp arch/arm/boot/dts/*.dtb /boot/
-	sudo cp arch/arm/boot/dts/overlays/*.dtb* /boot/overlays/
-	sudo cp arch/arm/boot/dts/overlays/README /boot/overlays/
-	echo "      A reboot is required to use the new device tree"
+# If running on Raspberry Pi, install what was built
+if [[ "${IS_RASPBIAN}" == true ]]; then
+	cd "${KERNEL_DIR}"
+	if [[ "${MAKE_TARGETS}" == *"${IMAGE}"* ]]; then
+		echo "   Installing kernel ..."
+		sudo cp "arch/${ARCH}/boot/${IMAGE}" "/boot/${KERNEL}.img" > /dev/null
+		echo "      A reboot is required to use the new kernel"
+	fi
+	if [[ "${MAKE_TARGETS}" == *"modules"* ]]; then
+		echo "   Installing modules ..."
+		sudo make modules_install > /dev/null
+	fi
+	if [[ "${MAKE_TARGETS}" == *"dtbs"* ]]; then
+		echo "   Installing device tree ..."
+		if [[ "${ARCH}" == *64* ]]; then
+			sudo cp "arch/${ARCH}/boot/dts/broadcom/"*.dtb /boot/
+		else
+			sudo cp "arch/${ARCH}/boot/dts/"*.dtb /boot/
+		fi
+		sudo cp "arch/${ARCH}/boot/dts/overlays/"*.dtb* /boot/overlays/
+		sudo cp "arch/${ARCH}/boot/dts/overlays/README" /boot/overlays/
+		echo "      A reboot is required to use the new device tree"
+	fi
 fi
 
 echo ""

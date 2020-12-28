@@ -1,0 +1,124 @@
+version: 2.1
+
+executors:
+  alpine:
+    docker:
+      - image: alpine:latest
+  docker:
+    docker:
+      - image: docker:stable
+
+jobs:
+  dummy:
+    executor: alpine
+    steps:
+      - run:
+          name: Dummy
+          command: echo ok
+
+  shell-lint:
+    executor: alpine
+    steps:
+      - checkout
+      - run:
+          name: Run ShellCheck
+          command: |
+            apk add shellcheck
+            shellcheck rpi-kernel
+
+  docker-lint:
+    executor: docker
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Run hadolint
+          command: |
+            cd "${VERSION}"
+            docker run --rm --interactive hadolint/hadolint < test/Dockerfile
+
+  test:
+    parameters:
+      arch:
+        type: string
+        default: arm
+      processor:
+        type: string
+    executor: docker
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Build Docker Image
+          no_output_timeout: 60m
+          command: |
+            docker build \
+              --file test/Dockerfile \
+              --build-arg ARCH="<<parameters.arch>>" \
+              --build-arg PROCESSOR="<<parameters.processor>>" \
+              --tag rpi-kernel .
+
+workflows:
+  version: 2.1
+  test:
+    jobs:
+      - shell-lint
+      - docker-lint
+      - dummy:
+          name: lint
+          requires:
+            - shell-lint
+            - docker-lint
+
+      - test:
+          name: test-bcm2835
+          processor: BCM2835
+          requires:
+            - lint
+      - test:
+          name: test-bcm2836
+          processor: BCM2836
+          requires:
+            - lint
+      - test:
+          name: test-bcm2711
+          processor: BCM2711
+          requires:
+            - lint
+      - test:
+          name: test-bcm2711-64
+          arch: arm64
+          processor: BCM2711
+          requires:
+            - lint
+      - dummy:
+          name: test
+          requires:
+            - test-bcm2835
+            - test-bcm2836
+            - test-bcm2711
+            - test-bcm2711-64
+  
+  # weekly:
+  #   triggers:
+  #     - schedule:
+  #         cron: "0 0 * * 1"
+  #         filters:
+  #           branches:
+  #             only:
+  #               - master
+  #   jobs:
+  #     - test:
+  #         name: test-kernel
+  #         kernel: kernel
+  #     - test:
+  #         name: test-kernel7
+  #         kernel: kernel7
+  #     - test:
+  #         name: test-kernel7l
+  #         kernel: kernel7l
+  #     - test:
+  #         name: test-kernel8
+  #         arch: arm64
+  #         cross_compile: aarch64-linux-gnu-
+  #         kernel: kernel8
